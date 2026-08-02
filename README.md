@@ -15,13 +15,13 @@ Pi Web requires Node.js 22.19.0 or newer. Check your version with `node --versio
 **Run without installing:**
 
 ```bash
-npx @agegr/pi-web@latest
+npx @lyhue1991/pi-web@latest
 ```
 
 **Or install globally:**
 
 ```bash
-npm install -g @agegr/pi-web
+npm install -g @lyhue1991/pi-web
 pi-web
 ```
 
@@ -57,7 +57,7 @@ On macOS or Linux:
 HTTP_PROXY=http://127.0.0.1:7890 \
 HTTPS_PROXY=http://127.0.0.1:7890 \
 NO_PROXY=localhost,127.0.0.1 \
-npx @agegr/pi-web@latest
+npx @lyhue1991/pi-web@latest
 ```
 
 On Windows PowerShell:
@@ -66,7 +66,7 @@ On Windows PowerShell:
 $env:HTTP_PROXY = "http://127.0.0.1:7890"
 $env:HTTPS_PROXY = "http://127.0.0.1:7890"
 $env:NO_PROXY = "localhost,127.0.0.1"
-npx @agegr/pi-web@latest
+npx @lyhue1991/pi-web@latest
 ```
 
 ## Features
