@@ -45,6 +45,8 @@ interface Props {
 
 export interface FileExplorerHandle {
   openUploadPicker: () => void;
+  startNewFile: () => void;
+  startNewFolder: () => void;
 }
 
 type UploadPhase = "idle" | "checking" | "uploading";
@@ -1020,6 +1022,18 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
     }
   }, [cwd, t]);
 
+  const openWithSystem = useCallback(async (node: FileNode) => {
+    try {
+      const res = await fetch(`/api/files/${encodeFilePathForApi(node.fullPath)}?type=open`);
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({})) as { error?: string };
+        throw new Error(data.error ?? `HTTP ${res.status}`);
+      }
+    } catch (err) {
+      setFileOpError((err as Error).message || t("files.openFailed"));
+    }
+  }, [t]);
+
   const handleDragStartNode = useCallback((node: FileNode, event: React.DragEvent) => {
     draggedPathRef.current = node.fullPath;
     event.dataTransfer.setData("application/x-pi-file-path", node.fullPath);
@@ -1149,7 +1163,13 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
     openUploadPicker() {
       if (!uploadBusy) uploadInputRef.current?.click();
     },
-  }), [uploadBusy]);
+    startNewFile() {
+      startCreate(cwd, false);
+    },
+    startNewFolder() {
+      startCreate(cwd, true);
+    },
+  }), [uploadBusy, startCreate, cwd]);
 
   useEffect(() => {
     onUploadBusyChange?.(uploadBusy);
@@ -1222,6 +1242,12 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
     (node: FileNode | null): ContextMenuItem[] => {
       const items: ContextMenuItem[] = [];
       if (node) {
+        items.push({
+          key: "open",
+          label: t("files.open"),
+          onClick: () => void openWithSystem(node),
+          separatorAfter: true,
+        });
         items.push({ key: "rename", label: t("files.rename"), onClick: () => startRename(node) });
         items.push({
           key: "delete",
@@ -1248,7 +1274,7 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
       }
       return items;
     },
-    [t, startRename, startDelete, startCreate, copyPath, cwd],
+    [t, startRename, startDelete, startCreate, copyPath, cwd, openWithSystem],
   );
 
   // Root-level phantom row: only when creating at cwd (the root list itself).

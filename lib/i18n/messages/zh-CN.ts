@@ -152,6 +152,8 @@ export const zhCNLocale: LocalePlugin = {
     "files.cancel": "取消",
     "files.checking": "正在检查文件",
     "files.uploading": "正在上传，{progress}%",
+    "files.openFailed": "打开文件失败",
+    "files.open": "打开",
     "files.rename": "重命名",
     "files.moveToTrash": "移到回收站",
     "files.deleteFileWarning": "要将「{name}」移到回收站吗？此操作无法撤销。",

@@ -5,6 +5,7 @@ import type { SessionInfo } from "@/lib/types";
 import { useI18n } from "@/hooks/useI18n";
 import { DirectoryPicker } from "./DirectoryPicker";
 import { FileExplorer, type FileExplorerHandle } from "./FileExplorer";
+import { FileContextMenu } from "./FileContextMenu";
 
 declare global {
   interface Window {
@@ -425,6 +426,8 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   const sessionRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const explorerRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const fileExplorerRef = useRef<FileExplorerHandle>(null);
+  const [explorerHeaderMenu, setExplorerHeaderMenu] = useState<{ x: number; y: number } | null>(null);
+  const pendingHeaderCreateRef = useRef<"file" | "folder" | null>(null);
 
   const loadSessions = useCallback(async (showLoading = false) => {
     try {
@@ -563,6 +566,29 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   useEffect(() => {
     if (explorerRefreshKey !== undefined) setExplorerKey((k) => k + 1);
   }, [explorerRefreshKey]);
+
+  const triggerHeaderCreate = useCallback((kind: "file" | "folder") => {
+    setExplorerHeaderMenu(null);
+    if (explorerOpen) {
+      const handle = fileExplorerRef.current;
+      if (kind === "file") handle?.startNewFile();
+      else handle?.startNewFolder();
+    } else {
+      pendingHeaderCreateRef.current = kind;
+      setExplorerOpen(true);
+    }
+  }, [explorerOpen]);
+
+  useEffect(() => {
+    if (!explorerOpen) return;
+    const kind = pendingHeaderCreateRef.current;
+    if (!kind) return;
+    pendingHeaderCreateRef.current = null;
+    const handle = fileExplorerRef.current;
+    if (!handle) return;
+    if (kind === "file") handle.startNewFile();
+    else handle.startNewFolder();
+  }, [explorerOpen]);
 
   useEffect(() => {
     fetch("/api/home").then((r) => r.json()).then((d: { home?: string }) => {
@@ -1556,7 +1582,14 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
             overflow: "hidden",
           }}
         >
-          <div style={{ display: "flex", alignItems: "center", flexShrink: 0 }}>
+          <div
+            style={{ display: "flex", alignItems: "center", flexShrink: 0 }}
+            onContextMenu={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              setExplorerHeaderMenu({ x: event.clientX, y: event.clientY });
+            }}
+          >
             <button
               onClick={() => setExplorerOpen((v) => !v)}
               style={{
@@ -1654,6 +1687,17 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
                 onChangesCountChange={setChangesCount}
               />
             </div>
+          )}
+          {explorerHeaderMenu && (
+            <FileContextMenu
+              x={explorerHeaderMenu.x}
+              y={explorerHeaderMenu.y}
+              items={[
+                { key: "newfile", label: t("files.newFile"), onClick: () => triggerHeaderCreate("file") },
+                { key: "newfolder", label: t("files.newFolder"), onClick: () => triggerHeaderCreate("folder") },
+              ]}
+              onClose={() => setExplorerHeaderMenu(null)}
+            />
           )}
         </div>
       )}

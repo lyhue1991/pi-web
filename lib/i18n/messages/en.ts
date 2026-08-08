@@ -152,6 +152,8 @@ export const enLocale: LocalePlugin = {
     "files.cancel": "Cancel",
     "files.checking": "Checking files",
     "files.uploading": "Uploading, {progress}%",
+    "files.openFailed": "Failed to open file",
+    "files.open": "Open",
     "files.rename": "Rename",
     "files.moveToTrash": "Move to Trash",
     "files.deleteFileWarning": "Move \"{name}\" to the trash? It cannot be undone.",

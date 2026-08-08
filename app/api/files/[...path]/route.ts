@@ -28,6 +28,7 @@ import {
 } from "@/lib/file-upload";
 import { parseFormDataWithinLimit, RequestBodyTooLargeError } from "@/lib/bounded-form-data";
 import trash from "trash";
+import { spawn } from "child_process";
 import {
   FileOpError,
   authorizeExistingPath,
@@ -43,7 +44,7 @@ const IGNORED_NAMES = new Set([
 
 const IGNORED_SUFFIXES = [".pyc"];
 
-const FILE_REQUEST_TYPES = ["list", "read", "download", "meta", "preview", "watch"] as const;
+const FILE_REQUEST_TYPES = ["list", "read", "download", "open", "meta", "preview", "watch"] as const;
 type FileRequestType = typeof FILE_REQUEST_TYPES[number];
 const FILE_REQUEST_TYPE_SET = new Set<string>(FILE_REQUEST_TYPES);
 const MAX_UPLOAD_FILE_BYTES = 25 * 1024 * 1024;
@@ -85,6 +86,31 @@ function filePathFromSegments(segments: string[]): string {
 
 function parseFileRequestType(value: string): FileRequestType | null {
   return FILE_REQUEST_TYPE_SET.has(value) ? (value as FileRequestType) : null;
+}
+
+/** Launch a file or folder with the OS default application (detached so it
+ * survives the request and never blocks the response). */
+function openWithSystemDefault(targetPath: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    let command: string;
+    let args: string[];
+    if (process.platform === "darwin") {
+      command = "open";
+      args = [targetPath];
+    } else if (process.platform === "win32") {
+      command = "cmd";
+      args = ["/c", "start", "", targetPath];
+    } else {
+      command = "xdg-open";
+      args = [targetPath];
+    }
+    const child = spawn(command, args, { detached: true, stdio: "ignore" });
+    child.once("error", reject);
+    child.once("spawn", () => {
+      child.unref();
+      resolve();
+    });
+  });
 }
 
 async function getUploadDirectory(segments: string[]): Promise<
@@ -640,6 +666,14 @@ export async function GET(
       }
       const mime = getImageMime(filePath) || getAudioMime(filePath) || getDocumentMime(filePath) || "application/octet-stream";
       return streamFile(filePath, stat, mime, request.headers.get("range"), true);
+    }
+    if (type === "open") {
+      try {
+        await openWithSystemDefault(filePath);
+      } catch (err) {
+        return NextResponse.json({ error: `Failed to open file: ${(err as Error).message}` }, { status: 500 });
+      }
+      return NextResponse.json({ ok: true });
     }
 
     if (type === "meta") {
