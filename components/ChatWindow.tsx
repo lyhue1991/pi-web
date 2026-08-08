@@ -9,6 +9,7 @@ import { MessageView } from "./MessageView";
 import { ChatInput, type ChatInputHandle } from "./ChatInput";
 import { ChatMinimap, useMessageRefs } from "./ChatMinimap";
 import { ExtensionStatusBar } from "./ExtensionStatusBar";
+import { GoalPanel } from "./GoalPanel";
 import { useI18n } from "@/hooks/useI18n";
 import { useAgentSession, type AgentPhase, type NoticeItem } from "@/hooks/useAgentSession";
 import { useAudio } from "@/hooks/useAudio";
@@ -210,6 +211,7 @@ export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreate
     lastUserMsgRef, promptAnchorActive,
     handleSend, handleAbort, handleFork, handleNavigate, handleModelChange,
     handleCompact, handleSteer, handleFollowUp, handlePromptWithStreamingBehavior, handleAbortCompaction,
+    sendGoalAction, sendGoalEdit,
     handleRecallQueue,
     handleBuiltinSlashCommand,
     handleToolPresetChange, handleThinkingLevelChange, loadSlashCommands, scrollToBottom, scrollUserMsgToTop,
@@ -500,8 +502,11 @@ export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreate
     />
   );
 
-  const aboveEditorWidgets = extensionWidgets.filter((widget) => widget.placement !== "belowEditor");
-  const belowEditorWidgets = extensionWidgets.filter((widget) => widget.placement === "belowEditor");
+  const goalWidget = extensionWidgets.find((widget) => widget.key === "goal");
+  const nonGoalWidgets = extensionWidgets.filter((widget) => widget.key !== "goal");
+  const aboveEditorWidgets = nonGoalWidgets.filter((widget) => widget.placement !== "belowEditor");
+  const belowEditorWidgets = nonGoalWidgets.filter((widget) => widget.placement === "belowEditor");
+  const nonGoalStatuses = extensionStatuses.filter((item) => item.key !== "goal");
 
   if (loading) {
     return (
@@ -603,6 +608,7 @@ export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreate
               </div>
             </div>
             <NoticeShelf notices={notices} align="right" />
+            <GoalPanel widget={goalWidget} onAction={sendGoalAction} onEditSubmit={sendGoalEdit} />
             {chatInputElement}
           </div>
         </div>
@@ -867,10 +873,11 @@ export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreate
         >
           <div style={{ maxWidth: 820, margin: "0 auto" }}>
             <ExtensionWidgets widgets={belowEditorWidgets} />
+            <GoalPanel widget={goalWidget} onAction={sendGoalAction} onEditSubmit={sendGoalEdit} />
           </div>
         </div>
         {chatInputElement}
-        <ExtensionStatusBar statuses={extensionStatuses} />
+        <ExtensionStatusBar statuses={nonGoalStatuses} />
       </div>
       </>
       )}

@@ -348,33 +348,45 @@ export class AgentSessionWrapper {
 
     switch (type) {
       case "prompt": {
-        if (this.inner.isBashRunning) {
+        const silent = Boolean(command.silent);
+        if (!silent && this.inner.isBashRunning) {
           throw new Error("Cannot send a prompt while a shell command is running");
         }
-        // Fire and forget — events come via subscribe
+        // Fire and forget - events come via subscribe
         const promptImages = command.images as Array<{ type: "image"; data: string; mimeType: string }> | undefined;
         const streamingBehavior = command.streamingBehavior as "steer" | "followUp" | undefined;
-        this.promptRunning = true;
-        notifyRunningChange();
+        if (!silent) {
+          this.promptRunning = true;
+          notifyRunningChange();
+        }
         this.inner.prompt(command.message as string, {
           ...(promptImages?.length ? { images: promptImages } : {}),
           ...(streamingBehavior ? { streamingBehavior } : {}),
           source: "rpc",
         }).then(() => {
-          this.promptRunning = false;
-          this.resetIdleTimer();
-          if (!streamingBehavior) this.emit({ type: "prompt_done" });
-          notifyRunningChange();
+          if (!silent) {
+            this.promptRunning = false;
+            this.resetIdleTimer();
+            if (!streamingBehavior) this.emit({ type: "prompt_done" });
+            notifyRunningChange();
+          }
         }).catch((error) => {
-          this.promptRunning = false;
-          this.resetIdleTimer();
-          invalidateSessionListCache();
-          this.emit({
-            type: "prompt_error",
-            errorMessage: error instanceof Error ? error.message : String(error),
-          });
-          if (!streamingBehavior) this.emit({ type: "prompt_done" });
-          notifyRunningChange();
+          if (!silent) {
+            this.promptRunning = false;
+            this.resetIdleTimer();
+            invalidateSessionListCache();
+            this.emit({
+              type: "prompt_error",
+              errorMessage: error instanceof Error ? error.message : String(error),
+            });
+            if (!streamingBehavior) this.emit({ type: "prompt_done" });
+            notifyRunningChange();
+          } else {
+            this.emit({
+              type: "extension_error",
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
         });
         return null;
       }

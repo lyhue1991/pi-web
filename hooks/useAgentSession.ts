@@ -771,6 +771,30 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     }
   }, []);
 
+  const sendGoalAction = useCallback(async (subcommand: string) => {
+    const sid = sessionIdRef.current;
+    if (!sid) return;
+    try {
+      cancelEventStreamGrace();
+      await ensureEventsConnected(sid);
+      await sendAgentCommand(sid, { type: "prompt", message: `/goal ${subcommand}`, silent: true });
+    } catch (e) {
+      console.error("Failed to send goal action:", e);
+    }
+  }, [cancelEventStreamGrace, ensureEventsConnected]);
+
+  const sendGoalEdit = useCallback(async (newObjective: string) => {
+    const sid = sessionIdRef.current;
+    if (!sid) return;
+    try {
+      cancelEventStreamGrace();
+      await ensureEventsConnected(sid);
+      await sendAgentCommand(sid, { type: "prompt", message: `/goal edit ${newObjective}`, silent: true });
+    } catch (e) {
+      console.error("Failed to send goal edit:", e);
+    }
+  }, [cancelEventStreamGrace, ensureEventsConnected]);
+
   const addNotice = useCallback((notice: { id?: string; message: string; type?: NoticeType }) => {
     const message = notice.message.trim();
     if (!message) return;
@@ -1898,6 +1922,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     // Actions
     handleSend, handleAbort, handleFork, handleNavigate, handleModelChange,
     handleCompact, handleSteer, handleFollowUp, handlePromptWithStreamingBehavior, handleAbortCompaction,
+    sendGoalAction, sendGoalEdit,
     handleRecallQueue,
     handleBuiltinSlashCommand,
     handleToolPresetChange, handleThinkingLevelChange, loadTools, loadSlashCommands, setActiveLeafId, setData, setMessages,
