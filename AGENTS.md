@@ -257,6 +257,7 @@ pi 存储的 toolCall 块为 `{type:"toolCall", id, name, arguments}`，而 `Too
 - `bin/pi-web.js` 是发布的 `pi-web` CLI：先校验 Node 版本，再解析 `next` bin（不依赖 `.bin` 软链，兼容 npx 安装），要求 `.next/` 已构建。
 - 非 loopback hostname 启动时若未设 `PI_WEB_PASSWORD` 会告警（见 `proxy.ts` 的 Basic 认证）。
 - 发布流程见 `docs/release.md`：`npm run release` = `npm version patch --no-git-tag-version && npm run build && npm publish --access public`。
+- **npm 发布需 2FA（必须用 TTY）**：`@lyhue1991` 对 publish 启用了双因子认证，无 TTY 直接 `npm publish` 会报 `EOTP` 退出。发布要在 TTY（PTY）下跑，让 npm 走 web 授权：它会打印 `https://www.npmjs.com/auth/cli/<token>` 并提示 "Press ENTER to open in the browser"。随后 `open "<url>"` 在浏览器打开授权页（或向 stdin 发回车让 npm 自行打开），用户在浏览器点确认后 npm 自动完成上传。
 
 ---
 
