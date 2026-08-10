@@ -2,7 +2,7 @@
 
 import { useEffect, useLayoutEffect, useState, useCallback, useMemo, useRef, type CSSProperties, type ReactNode } from "react";
 import type { SessionInfo } from "@/lib/types";
-import { loadExplorerOpen, saveExplorerOpen } from "@/lib/file-explorer-state";
+import { loadExplorerMaximized, loadExplorerOpen, saveExplorerMaximized, saveExplorerOpen } from "@/lib/file-explorer-state";
 import { useI18n } from "@/hooks/useI18n";
 import { DirectoryPicker } from "./DirectoryPicker";
 import { FileExplorer, type FileExplorerHandle } from "./FileExplorer";
@@ -418,12 +418,12 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   const wtDropdownRef = useRef<HTMLDivElement>(null);
   const wtNewInputRef = useRef<HTMLInputElement>(null);
   const [explorerOpen, setExplorerOpen] = useState(true);
+  const [sessionsOpen, setSessionsOpen] = useState(true);
   const [explorerKey, setExplorerKey] = useState(0);
   const [explorerUploadBusy, setExplorerUploadBusy] = useState(false);
   const [changesCount, setChangesCount] = useState(0);
   const [changesCollapsed, setChangesCollapsed] = useState(true);
   const [sessionRefreshDone, setSessionRefreshDone] = useState(false);
-  const [explorerRefreshDone, setExplorerRefreshDone] = useState(false);
   const [runningSessionIds, setRunningSessionIds] = useState<Set<string>>(() => new Set());
   const [unreadSessionIds, setUnreadSessionIds] = useState<Set<string>>(() => loadUnreadSessionIds());
   const previousRunningSessionIdsRef = useRef<Set<string>>(new Set());
@@ -431,9 +431,12 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   // running state; late /api/sessions responses must not overwrite it.
   const runningPollAuthoritativeRef = useRef(false);
   const sessionRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const explorerRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const fileExplorerRef = useRef<FileExplorerHandle>(null);
   const [explorerHeaderMenu, setExplorerHeaderMenu] = useState<{ x: number; y: number } | null>(null);
+  const [sessionContextMenu, setSessionContextMenu] = useState<{ x: number; y: number } | null>(null);
+  const [bulkDeleteConfirm, setBulkDeleteConfirm] = useState<{ kind: "days" | "all"; days?: number; count: number; ids: string[] } | null>(null);
+  const [bulkDeleting, setBulkDeleting] = useState(false);
+  const [bulkDeleteNotice, setBulkDeleteNotice] = useState<string | null>(null);
   const pendingHeaderCreateRef = useRef<"file" | "folder" | null>(null);
 
   const loadSessions = useCallback(async (showLoading = false) => {
@@ -479,6 +482,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   // preference after hydration so a collapsed explorer stays collapsed on reload.
   useEffect(() => {
     setExplorerOpen(loadExplorerOpen());
+    setSessionsOpen(!loadExplorerMaximized());
   }, []);
 
   // Persist unread markers so they survive a browser refresh before the user
@@ -584,6 +588,26 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   useEffect(() => {
     if (explorerRefreshKey !== undefined) setExplorerKey((k) => k + 1);
   }, [explorerRefreshKey]);
+
+  const toggleSessionsOpen = useCallback(() => {
+    setSessionsOpen((open) => {
+      const next = !open;
+      saveExplorerMaximized(!next);
+      return next;
+    });
+  }, []);
+
+  const toggleExplorerOpen = useCallback(() => {
+    setExplorerOpen((open) => {
+      const next = !open;
+      saveExplorerOpen(next);
+      if (!next) {
+        setSessionsOpen(true);
+        saveExplorerMaximized(false);
+      }
+      return next;
+    });
+  }, []);
 
   const triggerHeaderCreate = useCallback((kind: "file" | "folder") => {
     setExplorerHeaderMenu(null);
@@ -944,6 +968,79 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   // Build parent-child tree within the filtered set
   const sessionTree = buildSessionTree(filteredSessions);
 
+  const deletableSessions = useMemo(
+    () => filteredSessions.filter((s) => !runningSessionIds.has(s.id)),
+    [filteredSessions, runningSessionIds],
+  );
+  const sessionsOlderThanDays = useCallback(
+    (days: number) => {
+      const cutoff = Date.now() - days * 86_400_000;
+      return deletableSessions.filter((s) => new Date(s.modified).getTime() < cutoff);
+    },
+    [deletableSessions],
+  );
+  const sessionContextMenuItems = useMemo(() => {
+    const older3 = sessionsOlderThanDays(3);
+    const older1 = sessionsOlderThanDays(1);
+    const openDelete = (ids: string[], kind: "days" | "all", days?: number, count?: number) => {
+      if (ids.length === 0) return;
+      setBulkDeleteConfirm({ kind, days, count: count ?? ids.length, ids });
+    };
+    return [
+      {
+        key: "delete-3d",
+        label: t("sidebar.deleteSessionsOlderThan", { days: 3, count: older3.length }),
+        danger: true,
+        disabled: older3.length === 0,
+        onClick: () => openDelete(older3.map((s) => s.id), "days", 3, older3.length),
+      },
+      {
+        key: "delete-1d",
+        label: t("sidebar.deleteSessionsOlderThan", { days: 1, count: older1.length }),
+        danger: true,
+        disabled: older1.length === 0,
+        onClick: () => openDelete(older1.map((s) => s.id), "days", 1, older1.length),
+      },
+      {
+        key: "delete-all",
+        label: t("sidebar.deleteAllSessions", { count: deletableSessions.length }),
+        danger: true,
+        separatorAfter: true,
+        disabled: deletableSessions.length === 0,
+        onClick: () => openDelete(deletableSessions.map((s) => s.id), "all", undefined, deletableSessions.length),
+      },
+    ];
+  }, [sessionsOlderThanDays, deletableSessions, t]);
+
+  const runBulkDelete = useCallback(async () => {
+    const confirm = bulkDeleteConfirm;
+    if (!confirm) return;
+    setBulkDeleting(true);
+    let skipped = 0;
+    for (const id of confirm.ids) {
+      if (runningSessionIds.has(id)) {
+        skipped++;
+        continue;
+      }
+      try {
+        await fetch(`/api/sessions/${encodeURIComponent(id)}`, { method: "DELETE" });
+        onSessionDeleted?.(id);
+      } catch {
+        // Keep going: one failure must not block the rest of the cleanup.
+      }
+    }
+    setBulkDeleteConfirm(null);
+    setBulkDeleting(false);
+    loadSessions(false);
+    if (skipped > 0) setBulkDeleteNotice(t("sidebar.skippedRunningSessions", { count: skipped }));
+  }, [bulkDeleteConfirm, runningSessionIds, onSessionDeleted, loadSessions, t]);
+
+  useEffect(() => {
+    if (!bulkDeleteNotice) return;
+    const id = setTimeout(() => setBulkDeleteNotice(null), 3000);
+    return () => clearTimeout(id);
+  }, [bulkDeleteNotice]);
+
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
       {customPathOpen && (
@@ -1007,7 +1104,11 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
               {t("sidebar.new")}
             </button>
             <button
-              onClick={() => loadSessions(false)}
+              onClick={() => {
+                loadSessions(false);
+                if (onExplorerRefresh) onExplorerRefresh();
+                else setExplorerKey((k) => k + 1);
+              }}
               style={{
                 display: "flex", alignItems: "center", justifyContent: "center",
                 background: sessionRefreshDone ? "rgba(74,222,128,0.18)" : "var(--bg-hover)",
@@ -1607,8 +1708,126 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
         )}
       </div>
 
+      {/* Session panel */}
+      <div
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          flex: (selectedCwdProp || selectedCwd)
+            ? sessionsOpen
+              ? explorerOpen ? "1 1 0" : "1 1 auto"
+              : "0 0 auto"
+            : "1 1 auto",
+          minHeight: 0,
+          overflow: "hidden",
+        }}
+      >
+      {/* Session list header */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 6,
+          padding: 0,
+          borderBottom: "1px solid var(--border)",
+          flexShrink: 0,
+        }}
+        onContextMenu={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          setSessionContextMenu({ x: event.clientX, y: event.clientY });
+        }}
+      >
+        <button
+          type="button"
+          onClick={toggleSessionsOpen}
+          title={sessionsOpen ? t("sidebar.collapseSessions") : t("sidebar.expandSessions")}
+          aria-expanded={sessionsOpen}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+            flex: 1,
+            padding: "6px 10px",
+            background: "none",
+            border: "none",
+            color: "var(--text-muted)",
+            cursor: "pointer",
+            fontSize: 11,
+            fontWeight: 600,
+            letterSpacing: "0.05em",
+            textTransform: "uppercase",
+            textAlign: "left",
+          }}
+        >
+          <svg
+            width="9" height="9" viewBox="0 0 10 10" fill="none"
+            stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"
+            style={{ transform: sessionsOpen ? "rotate(90deg)" : "none", transition: "transform 0.15s", flexShrink: 0 }}
+          >
+            <polyline points="3 2 7 5 3 8" />
+          </svg>
+          {t("sidebar.sessionListWithCount", { count: filteredSessions.length })}
+        </button>
+        {sessionsOpen && (selectedCwdProp || selectedCwd) && (
+          <ToolbarIconButton
+            onClick={toggleExplorerOpen}
+            title={explorerOpen ? t("sidebar.maximizeSessions") : t("sidebar.restoreSessions")}
+            ariaPressed={!explorerOpen}
+            color={!explorerOpen ? "var(--accent)" : "var(--text-dim)"}
+            background={!explorerOpen ? "var(--bg-selected)" : "none"}
+          >
+            {!explorerOpen ? (
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M8 3v3a2 2 0 0 1-2 2H3" />
+                <path d="M21 8h-3a2 2 0 0 1-2-2V3" />
+                <path d="M3 16h3a2 2 0 0 1 2 2v3" />
+                <path d="M16 21v-3a2 2 0 0 1 2-2h3" />
+              </svg>
+            ) : (
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M8 3H5a2 2 0 0 0-2 2v3" />
+                <path d="M21 8V5a2 2 0 0 0-2-2h-3" />
+                <path d="M3 16v3a2 2 0 0 0 2 2h3" />
+                <path d="M16 21h3a2 2 0 0 0 2-2v-3" />
+              </svg>
+            )}
+          </ToolbarIconButton>
+        )}
+      </div>
+
+      {bulkDeleteNotice && (
+        <div
+          role="status"
+          style={{
+            padding: "6px 12px",
+            fontSize: 11,
+            color: "var(--text-muted)",
+            background: "var(--bg-hover)",
+            borderBottom: "1px solid var(--border)",
+            flexShrink: 0,
+          }}
+        >
+          {bulkDeleteNotice}
+        </div>
+      )}
+
       {/* Session list */}
-      <div style={{ flex: explorerOpen && (selectedCwdProp || selectedCwd) ? "1 1 0" : "1 1 auto", overflowY: "auto", padding: "0", minHeight: 80 }}>
+      <div
+        style={{
+          flex: 1,
+          overflowY: "auto",
+          overflowX: "hidden",
+          padding: "0",
+          minHeight: 0,
+          display: !sessionsOpen && (selectedCwdProp || selectedCwd) ? "none" : undefined,
+        }}
+        onContextMenu={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          setSessionContextMenu({ x: event.clientX, y: event.clientY });
+        }}
+      >
         {loading && (
           <div style={{ padding: "16px 14px", color: "var(--text-muted)", fontSize: 12 }}>
             {t("sidebar.loading")}
@@ -1637,9 +1856,11 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
               onSessionDeleted?.(id);
               loadSessions();
             }}
+            onContextMenu={(event) => setSessionContextMenu({ x: event.clientX, y: event.clientY })}
             depth={0}
           />
         ))}
+      </div>
       </div>
 
       {/* File Explorer section */}
@@ -1663,11 +1884,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
             }}
           >
             <button
-              onClick={() => setExplorerOpen((open) => {
-                const next = !open;
-                saveExplorerOpen(next);
-                return next;
-              })}
+              onClick={toggleExplorerOpen}
               style={{
                 display: "flex",
                 alignItems: "center",
@@ -1723,31 +1940,31 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
                 </svg>
               </ToolbarIconButton>
             )}
-            <ToolbarIconButton
-              onClick={() => {
-                if (onExplorerRefresh) onExplorerRefresh();
-                else setExplorerKey((k) => k + 1);
-                setExplorerRefreshDone(true);
-                if (explorerRefreshTimerRef.current) clearTimeout(explorerRefreshTimerRef.current);
-                explorerRefreshTimerRef.current = setTimeout(() => setExplorerRefreshDone(false), 2000);
-              }}
-              title={t("sidebar.refreshExplorer")}
-              skipHover={explorerRefreshDone}
-              color={explorerRefreshDone ? "#4ade80" : "var(--text-dim)"}
-              background={explorerRefreshDone ? "rgba(74,222,128,0.18)" : "none"}
-              marginRight={6}
-            >
-              {explorerRefreshDone ? (
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#4ade80" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                  <polyline points="20 6 9 17 4 12" />
-                </svg>
-              ) : (
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
-                  <path d="M3 3v5h5" />
-                </svg>
-              )}
-            </ToolbarIconButton>
+            {explorerOpen && (
+              <ToolbarIconButton
+                onClick={toggleSessionsOpen}
+                title={sessionsOpen ? t("sidebar.maximizeExplorer") : t("sidebar.restoreExplorer")}
+                ariaPressed={!sessionsOpen}
+                color={!sessionsOpen ? "var(--accent)" : "var(--text-dim)"}
+                background={!sessionsOpen ? "var(--bg-selected)" : "none"}
+              >
+                {!sessionsOpen ? (
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M8 3v3a2 2 0 0 1-2 2H3" />
+                    <path d="M21 8h-3a2 2 0 0 1-2-2V3" />
+                    <path d="M3 16h3a2 2 0 0 1 2 2v3" />
+                    <path d="M16 21v-3a2 2 0 0 1 2-2h3" />
+                  </svg>
+                ) : (
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M8 3H5a2 2 0 0 0-2 2v3" />
+                    <path d="M21 8V5a2 2 0 0 0-2-2h-3" />
+                    <path d="M3 16v3a2 2 0 0 0 2 2h3" />
+                    <path d="M16 21h3a2 2 0 0 0 2-2v-3" />
+                  </svg>
+                )}
+              </ToolbarIconButton>
+            )}
           </div>
           {explorerOpen && (
             <div style={{ flex: 1, overflowY: "auto", overflowX: "hidden" }}>
@@ -1777,6 +1994,129 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
           )}
         </div>
       )}
+      {sessionContextMenu && (
+        <FileContextMenu
+          x={sessionContextMenu.x}
+          y={sessionContextMenu.y}
+          items={sessionContextMenuItems}
+          onClose={() => setSessionContextMenu(null)}
+        />
+      )}
+      {bulkDeleteConfirm && (
+        <BulkDeleteConfirmDialog
+          confirm={bulkDeleteConfirm}
+          busy={bulkDeleting}
+          t={t}
+          onCancel={() => setBulkDeleteConfirm(null)}
+          onConfirm={() => void runBulkDelete()}
+        />
+      )}
+    </div>
+  );
+}
+
+function BulkDeleteConfirmDialog({
+  confirm,
+  busy,
+  t,
+  onCancel,
+  onConfirm,
+}: {
+  confirm: { kind: "days" | "all"; days?: number; count: number };
+  busy: boolean;
+  t: (key: string, params?: Record<string, string | number>) => string;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const message = confirm.kind === "days"
+    ? t("sidebar.confirmDeleteSessions", { days: confirm.days ?? 3, count: confirm.count })
+    : t("sidebar.confirmDeleteAllSessions", { count: confirm.count });
+  return (
+    <div
+      role="presentation"
+      style={{
+        position: "fixed",
+        inset: 0,
+        zIndex: 1100,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: 16,
+        background: "rgba(0,0,0,0.4)",
+      }}
+      onClick={(event) => {
+        if (!busy && event.target === event.currentTarget) onCancel();
+      }}
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={message}
+        style={{
+          width: 400,
+          maxWidth: "100%",
+          border: "1px solid var(--border)",
+          borderRadius: 8,
+          background: "var(--bg-panel)",
+          boxShadow: "0 12px 36px rgba(0,0,0,0.24)",
+          overflow: "hidden",
+        }}
+      >
+        <div style={{ display: "flex", gap: 12, padding: "18px 18px 14px" }}>
+          <svg
+            width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#ef4444"
+            strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"
+            style={{ flexShrink: 0, marginTop: 1 }}
+          >
+            <path d="M3 6h18" />
+            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" />
+            <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+            <line x1="10" y1="11" x2="10" y2="17" />
+            <line x1="14" y1="11" x2="14" y2="17" />
+          </svg>
+          <div style={{ fontSize: 12, lineHeight: 1.5, color: "var(--text)" }}>
+            {message}
+            <div style={{ marginTop: 6, fontSize: 11, color: "var(--text-muted)" }}>
+              {t("sidebar.runningSessionsSkippedNote")}
+            </div>
+          </div>
+        </div>
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, padding: "0 18px 16px" }}>
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={busy}
+            style={{
+              border: "1px solid var(--border)",
+              borderRadius: 5,
+              background: "transparent",
+              color: "var(--text-muted)",
+              fontSize: 12,
+              padding: "5px 14px",
+              cursor: busy ? "default" : "pointer",
+            }}
+          >
+            {t("sidebar.cancel")}
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            disabled={busy}
+            style={{
+              border: "none",
+              borderRadius: 5,
+              background: busy ? "rgba(239,68,68,0.5)" : "#ef4444",
+              color: "#fff",
+              fontSize: 12,
+              fontWeight: 600,
+              padding: "5px 14px",
+              cursor: busy ? "default" : "pointer",
+            }}
+          >
+            {busy ? t("sidebar.deletingSessions") : t("sidebar.delete")}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -1789,6 +2129,7 @@ function SessionTreeItem({
   onSelectSession,
   onRenamed,
   onSessionDeleted,
+  onContextMenu,
   depth,
 }: {
   node: SessionTreeNode;
@@ -1798,6 +2139,7 @@ function SessionTreeItem({
   onSelectSession: (s: SessionInfo) => void;
   onRenamed?: () => void;
   onSessionDeleted?: (id: string) => void;
+  onContextMenu?: (event: React.MouseEvent) => void;
   depth: number;
 }) {
   const [collapsed, setCollapsed] = useState(false);
@@ -1825,6 +2167,7 @@ function SessionTreeItem({
           onClick={() => onSelectSession(node.session)}
           onRenamed={onRenamed}
           onDeleted={(id) => onSessionDeleted?.(id)}
+          onContextMenu={onContextMenu}
           depth={depth}
           hasChildren={hasChildren}
           collapsed={collapsed}
@@ -1967,6 +2310,7 @@ function SessionItem({
   onClick,
   onRenamed,
   onDeleted,
+  onContextMenu,
   depth = 0,
   hasChildren = false,
   collapsed = false,
@@ -1979,6 +2323,7 @@ function SessionItem({
   onClick: () => void;
   onRenamed?: () => void;
   onDeleted?: (id: string) => void;
+  onContextMenu?: (event: React.MouseEvent) => void;
   depth?: number;
   hasChildren?: boolean;
   collapsed?: boolean;
@@ -2063,6 +2408,11 @@ function SessionItem({
   return (
     <div
       onClick={confirmDelete || renaming ? undefined : onClick}
+      onContextMenu={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        onContextMenu?.(event);
+      }}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => { setHovered(false); }}
       style={{

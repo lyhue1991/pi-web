@@ -178,6 +178,35 @@ const GIT_STATUS_COLORS: Record<GitFileStatusKind, string> = {
   conflict: "#f87171",
 };
 
+interface DomNodeInfo {
+  name: string;
+  isDir: boolean;
+}
+
+function getNodeInfoFromDom(container: HTMLElement | null, path: string): DomNodeInfo | null {
+  if (!container) return null;
+  for (const el of Array.from(container.querySelectorAll<HTMLElement>("[data-path]"))) {
+    if (el.dataset.path === path) {
+      return { name: el.dataset.name ?? "", isDir: el.dataset.isdir === "1" };
+    }
+  }
+  return null;
+}
+
+function getVisibleRowsFromDom(container: HTMLElement | null): string[] {
+  if (!container) return [];
+  return Array.from(container.querySelectorAll<HTMLElement>("[data-path]"))
+    .map((el) => el.dataset.path ?? "")
+    .filter(Boolean);
+}
+
+function scrollRowIntoView(container: HTMLElement | null, path: string): void {
+  if (!container) return;
+  const el = Array.from(container.querySelectorAll<HTMLElement>("[data-path]"))
+    .find((item) => item.dataset.path === path);
+  el?.scrollIntoView({ block: "nearest" });
+}
+
 function GitStatusBadge({ status, t }: { status: GitFileStatus; t: Translate }) {
   return (
     <span
@@ -319,16 +348,18 @@ function CreatingRow({
 }
 
 function DeleteConfirmDialog({
-  name,
-  isDir,
+  count,
+  hasFolder,
+  previewName,
   busy,
   error,
   onCancel,
   onConfirm,
   t,
 }: {
-  name: string;
-  isDir: boolean;
+  count: number;
+  hasFolder: boolean;
+  previewName: string;
   busy: boolean;
   error: string | null;
   onCancel: () => void;
@@ -381,9 +412,11 @@ function DeleteConfirmDialog({
               {t("files.moveToTrash")}
             </div>
             <div style={{ marginTop: 7, fontSize: 12, lineHeight: 1.6, color: "var(--text-muted)" }}>
-              {isDir
-                ? t("files.deleteFolderWarning", { name })
-                : t("files.deleteFileWarning", { name })}
+              {count === 1
+                ? hasFolder
+                  ? t("files.deleteFolderWarning", { name: previewName })
+                  : t("files.deleteFileWarning", { name: previewName })
+                : t("files.deleteMultipleWarning", { count, countSuffix: count === 1 ? "" : "s", preview: previewName })}
             </div>
             {error && (
               <div role="alert" style={{ marginTop: 10, color: "#f87171", fontSize: 12, lineHeight: 1.5, overflowWrap: "anywhere" }}>
@@ -464,7 +497,10 @@ function TreeNode({
   onCancelEdit,
   onDragStartNode,
   onDropOnNode,
-  getDraggedPath,
+  getDraggedPaths,
+  selectedPaths,
+  onSelectNode,
+  onActivateNode,
 }: {
   node: FileNode;
   depth: number;
@@ -485,10 +521,14 @@ function TreeNode({
   onCancelEdit: () => void;
   onDragStartNode: (node: FileNode, event: React.DragEvent) => void;
   onDropOnNode: (node: FileNode, event: React.DragEvent) => void;
-  getDraggedPath: () => string | null;
+  getDraggedPaths: () => Set<string>;
+  selectedPaths: Set<string>;
+  onSelectNode: (node: FileNode, event: React.MouseEvent) => void;
+  onActivateNode: (node: FileNode) => void;
 }) {
   const open = expandedPaths.has(node.fullPath);
   const highlighted = highlightedPaths.has(node.fullPath);
+  const selected = selectedPaths.has(node.fullPath);
   const normalizedPath = normalizeFilePathSlashes(node.fullPath);
   const gitStatus = gitStatusByPath.get(normalizedPath);
   const containsGitChanges = node.isDir && (
@@ -506,16 +546,18 @@ function TreeNode({
       ? editing
       : null;
 
-  // Only folders accept drops, and never onto the dragged item itself or one
+  // Only folders accept drops, and never onto any dragged item itself or one
   // of its descendants (would move a folder into itself).
   const canAcceptDrop = useCallback(() => {
     if (!node.isDir) return false;
-    const source = getDraggedPath();
-    if (!source) return false;
-    const src = normalizeFilePathSlashes(source).replace(/\/$/, "");
-    if (normalizedPath === src || normalizedPath.startsWith(`${src}/`)) return false;
+    const dragged = getDraggedPaths();
+    if (dragged.size === 0) return false;
+    for (const raw of dragged) {
+      const src = normalizeFilePathSlashes(raw).replace(/\/$/, "");
+      if (normalizedPath === src || normalizedPath.startsWith(`${src}/`)) return false;
+    }
     return true;
-  }, [node.isDir, normalizedPath, getDraggedPath]);
+  }, [node.isDir, normalizedPath, getDraggedPaths]);
 
   const loadChildren = useCallback(async (force = false) => {
     if (loaded && !force) return;
@@ -539,20 +581,25 @@ function TreeNode({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refreshToken]);
 
-  const handleClick = useCallback(() => {
+  const handleClick = useCallback((event: React.MouseEvent) => {
+    onSelectNode(node, event);
+  }, [node, onSelectNode]);
+
+  const handleDoubleClick = useCallback(() => {
     if (node.isDir) {
       const next = !open;
       onToggleExpanded(node.fullPath, next);
       if (next && !loaded) loadChildren();
     } else {
-      onOpenFile(node.fullPath, node.name);
+      onActivateNode(node);
     }
-  }, [node.isDir, node.fullPath, node.name, loaded, open, loadChildren, onOpenFile, onToggleExpanded]);
+  }, [node, open, loaded, loadChildren, onToggleExpanded, onActivateNode]);
 
   return (
     <div>
       <div
         onClick={handleClick}
+        onDoubleClick={handleDoubleClick}
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
         onContextMenu={(event) => {
@@ -561,6 +608,9 @@ function TreeNode({
           onContextMenu(node, event);
         }}
         draggable={!isRenaming}
+        data-path={node.fullPath}
+        data-isdir={node.isDir ? "1" : "0"}
+        data-name={node.name}
         onDragStart={(event) => onDragStartNode(node, event)}
         onDragOver={(event) => {
           if (!canAcceptDrop()) return;
@@ -591,7 +641,9 @@ function TreeNode({
           cursor: isRenaming ? "default" : "pointer",
           background: dropTarget
             ? "var(--bg-selected)"
-            : hovered ? "var(--bg-hover)" : "transparent",
+            : selected
+              ? "var(--bg-selected)"
+              : hovered ? "var(--bg-hover)" : "transparent",
           borderRadius: 4,
           userSelect: "none",
           outline: dropTarget ? "1px solid var(--accent)" : "none",
@@ -601,7 +653,13 @@ function TreeNode({
           <svg
             width="10" height="10" viewBox="0 0 10 10" fill="none"
             stroke="var(--text-dim)" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"
-            style={{ flexShrink: 0, transform: open ? "rotate(90deg)" : "none", transition: "transform 0.1s" }}
+            style={{ flexShrink: 0, transform: open ? "rotate(90deg)" : "none", transition: "transform 0.1s", cursor: "pointer" }}
+            onClick={(event) => {
+              event.stopPropagation();
+              const next = !open;
+              onToggleExpanded(node.fullPath, next);
+              if (next && !loaded) loadChildren();
+            }}
           >
             <polyline points="3 2 7 5 3 8" />
           </svg>
@@ -765,7 +823,10 @@ function TreeNode({
               onCancelEdit={onCancelEdit}
               onDragStartNode={onDragStartNode}
               onDropOnNode={onDropOnNode}
-              getDraggedPath={getDraggedPath}
+              getDraggedPaths={getDraggedPaths}
+              selectedPaths={selectedPaths}
+              onSelectNode={onSelectNode}
+              onActivateNode={onActivateNode}
             />
           ))}
           {children.length === 0 && loaded && !creatingHere && (
@@ -853,6 +914,8 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set());
   const [treeRefreshKey, setTreeRefreshKey] = useState(0);
   const [highlightedPaths, setHighlightedPaths] = useState<Set<string>>(new Set());
+  const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set());
+  const [lastClickedPath, setLastClickedPath] = useState<string | null>(null);
   const [gitFiles, setGitFiles] = useState<GitFileStatus[]>([]);
   const [gitLineStats, setGitLineStats] = useState({ additions: 0, deletions: 0 });
   const [uploadPhase, setUploadPhase] = useState<UploadPhase>("idle");
@@ -869,12 +932,13 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
   // and transient file-operation feedback.
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; node: FileNode | null } | null>(null);
   const [editing, setEditing] = useState<EditingState | null>(null);
-  const [deleting, setDeleting] = useState<{ node: FileNode; busy: boolean; error: string | null } | null>(null);
+  const [deleting, setDeleting] = useState<{ nodes: FileNode[]; busy: boolean; error: string | null } | null>(null);
   const [fileOpError, setFileOpError] = useState<string | null>(null);
   const [fileOpNotice, setFileOpNotice] = useState<string | null>(null);
-  // The path being dragged. dataTransfer is unreadable during dragover, so the
-  // source path is carried in a ref instead (same-page DnD only).
-  const draggedPathRef = useRef<string | null>(null);
+  // The paths being dragged. dataTransfer is unreadable during dragover, so the
+  // source paths are carried in a ref instead (same-page DnD only).
+  const draggedPathsRef = useRef<Set<string>>(new Set());
+  const containerRef = useRef<HTMLDivElement>(null);
 
   const gitStatusByPath = useMemo(() => new Map(
     gitFiles.map((status) => [normalizeFilePathSlashes(status.filePath), status]),
@@ -933,6 +997,66 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
 
   const cancelEditing = useCallback(() => setEditing(null), []);
 
+  const clearSelection = useCallback(() => {
+    setSelectedPaths(new Set());
+    setLastClickedPath(null);
+  }, []);
+
+  const focusTree = useCallback(() => {
+    containerRef.current?.focus({ preventScroll: true });
+  }, []);
+
+  const selectSingle = useCallback((path: string) => {
+    setSelectedPaths(new Set([path]));
+    setLastClickedPath(path);
+    focusTree();
+  }, [focusTree]);
+
+  const toggleSelect = useCallback((path: string) => {
+    setSelectedPaths((prev) => {
+      const next = new Set(prev);
+      if (next.has(path)) next.delete(path); else next.add(path);
+      return next;
+    });
+    setLastClickedPath(path);
+    focusTree();
+  }, [focusTree]);
+
+  const handleSelectNode = useCallback((node: FileNode, event: React.MouseEvent) => {
+    const path = node.fullPath;
+    const meta = event.metaKey || event.ctrlKey;
+    const shift = event.shiftKey;
+    if (meta) {
+      toggleSelect(path);
+    } else if (shift && lastClickedPath) {
+      // Range select along visible rows: find between lastClickedPath and path.
+      // Simple implementation: collect all visible [data-path] rows in DOM order
+      // and select those between the two anchors.
+      const container = (event.currentTarget as HTMLElement).closest("[data-file-explorer]");
+      if (container) {
+        const rows = Array.from(container.querySelectorAll<HTMLElement>("[data-path]"));
+        const paths = rows.map((el) => el.dataset.path!).filter(Boolean);
+        const a = paths.indexOf(lastClickedPath);
+        const b = paths.indexOf(path);
+        if (a >= 0 && b >= 0) {
+          const [lo, hi] = a < b ? [a, b] : [b, a];
+          const range = new Set(paths.slice(lo, hi + 1));
+          setSelectedPaths(range);
+        } else {
+          selectSingle(path);
+        }
+      } else {
+        selectSingle(path);
+      }
+    } else {
+      selectSingle(path);
+    }
+  }, [lastClickedPath, selectSingle, toggleSelect]);
+
+  const handleActivateNode = useCallback((node: FileNode) => {
+    onOpenFile(node.fullPath, node.name);
+  }, [onOpenFile]);
+
   const startRename = useCallback((node: FileNode) => {
     setEditing({ kind: "rename", parentPath: getFileDirectory(node.fullPath), fullPath: node.fullPath });
   }, []);
@@ -943,8 +1067,10 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
     setEditing({ kind: isDir ? "newdir" : "newfile", parentPath });
   }, [cwd, handleToggleExpanded]);
 
-  const startDelete = useCallback((node: FileNode) => {
-    setDeleting({ node, busy: false, error: null });
+  const startDelete = useCallback((nodes: FileNode | FileNode[]) => {
+    const list = Array.isArray(nodes) ? nodes : [nodes];
+    if (list.length === 0) return;
+    setDeleting({ nodes: list, busy: false, error: null });
   }, []);
 
   const reportError = useCallback((err: unknown, existsKey: string, fallbackKey: string) => {
@@ -994,18 +1120,27 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
 
   const confirmDelete = useCallback(async () => {
     if (!deleting) return;
-    const target = deleting.node;
+    const targets = deleting.nodes;
     setDeleting((prev) => prev ? { ...prev, busy: true, error: null } : prev);
     try {
-      await deletePath(target.fullPath);
-      removeExpandedUnder(target.fullPath);
+      let lastErr: unknown = null;
+      for (const target of targets) {
+        try {
+          await deletePath(target.fullPath);
+          removeExpandedUnder(target.fullPath);
+        } catch (err) {
+          lastErr = err;
+        }
+      }
+      clearSelection();
       setDeleting(null);
       bumpRefresh();
+      if (lastErr) throw lastErr;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       setDeleting((prev) => prev ? { ...prev, busy: false, error: message } : prev);
     }
-  }, [deleting, removeExpandedUnder, bumpRefresh]);
+  }, [deleting, removeExpandedUnder, bumpRefresh, clearSelection]);
 
   const cancelDelete = useCallback(() => {
     if (deleting?.busy) return;
@@ -1035,36 +1170,64 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
   }, [t]);
 
   const handleDragStartNode = useCallback((node: FileNode, event: React.DragEvent) => {
-    draggedPathRef.current = node.fullPath;
-    event.dataTransfer.setData("application/x-pi-file-path", node.fullPath);
+    if (selectedPaths.has(node.fullPath) && selectedPaths.size > 1) {
+      draggedPathsRef.current = new Set(selectedPaths);
+    } else {
+      draggedPathsRef.current = new Set([node.fullPath]);
+      setSelectedPaths(new Set([node.fullPath]));
+      setLastClickedPath(node.fullPath);
+    }
+    event.dataTransfer.setData("application/x-pi-file-paths", JSON.stringify(Array.from(draggedPathsRef.current)));
     event.dataTransfer.effectAllowed = "move";
-  }, []);
+  }, [selectedPaths]);
 
   const handleDropOnNode = useCallback(async (folder: FileNode) => {
-    const source = draggedPathRef.current;
-    draggedPathRef.current = null;
-    if (!source) return;
-    const newPath = joinFilePath(folder.fullPath, getFileName(source));
-    if (newPath === source) return; // dropped into its current folder
-    try {
-      await renameOrMovePath(source, newPath);
-      remapExpandedPaths(source, newPath);
-      bumpRefresh();
-    } catch (err) {
-      reportError(err, "files.nameExists", "files.moveError");
+    const sources = Array.from(draggedPathsRef.current);
+    draggedPathsRef.current = new Set();
+    if (sources.length === 0) return;
+    let moved = 0;
+    let lastErr: unknown = null;
+    const movedMap = new Map<string, string>();
+    for (const source of sources) {
+      const newPath = joinFilePath(folder.fullPath, getFileName(source));
+      if (newPath === source) continue;
+      try {
+        await renameOrMovePath(source, newPath);
+        remapExpandedPaths(source, newPath);
+        movedMap.set(source, newPath);
+        moved++;
+      } catch (err) {
+        lastErr = err;
+      }
     }
+    if (movedMap.size > 0) {
+      setSelectedPaths((prev) => {
+        const next = new Set<string>();
+        for (const p of prev) next.add(movedMap.get(p) ?? p);
+        return next;
+      });
+      setLastClickedPath((prev) => (prev && movedMap.get(prev)) ?? prev);
+    }
+    if (moved > 0) bumpRefresh();
+    if (lastErr) reportError(lastErr, "files.nameExists", "files.moveError");
   }, [remapExpandedPaths, bumpRefresh, reportError]);
 
-  const getDraggedPath = useCallback(() => draggedPathRef.current, []);
+  const getDraggedPaths = useCallback(() => draggedPathsRef.current, []);
 
   const handleContextMenu = useCallback((node: FileNode, event: React.MouseEvent) => {
+    if (!selectedPaths.has(node.fullPath)) {
+      setSelectedPaths(new Set([node.fullPath]));
+      setLastClickedPath(node.fullPath);
+    }
     setContextMenu({ x: event.clientX, y: event.clientY, node });
-  }, []);
+  }, [selectedPaths]);
 
   const handleBlankContextMenu = useCallback((event: React.MouseEvent) => {
     event.preventDefault();
+    event.stopPropagation();
+    clearSelection();
     setContextMenu({ x: event.clientX, y: event.clientY, node: null });
-  }, []);
+  }, [clearSelection]);
 
   useEffect(() => {
     if (!fileOpNotice) return;
@@ -1238,43 +1401,86 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
     );
   }, [cwd, onAtMentions, uploadSummary]);
 
+  const collectSelectedNodes = useCallback((from: FileNode[]): FileNode[] => {
+    const found: FileNode[] = [];
+    const walk = (list: FileNode[]) => {
+      for (const item of list) {
+        if (selectedPaths.has(item.fullPath)) found.push(item);
+        if (item.children) walk(item.children);
+      }
+    };
+    walk(from);
+    return found;
+  }, [selectedPaths]);
+
   const buildContextMenuItems = useCallback(
     (node: FileNode | null): ContextMenuItem[] => {
       const items: ContextMenuItem[] = [];
+      const multi = selectedPaths.size > 1;
       if (node) {
-        items.push({
-          key: "open",
-          label: t("files.open"),
-          onClick: () => void openWithSystem(node),
-          separatorAfter: true,
-        });
-        items.push({ key: "rename", label: t("files.rename"), onClick: () => startRename(node) });
-        items.push({
-          key: "delete",
-          label: t("files.moveToTrash"),
-          onClick: () => startDelete(node),
-          danger: true,
-          separatorAfter: true,
-        });
+        if (!multi) {
+          items.push({
+            key: "open",
+            label: t("files.open"),
+            onClick: () => void openWithSystem(node),
+            separatorAfter: true,
+          });
+          items.push({ key: "rename", label: t("files.rename"), onClick: () => startRename(node) });
+          items.push({
+            key: "delete",
+            label: t("files.moveToTrash"),
+            onClick: () => startDelete(node),
+            danger: true,
+            separatorAfter: true,
+          });
+        } else {
+          items.push({
+            key: "delete",
+            label: t("files.moveToTrashMultiple", { count: selectedPaths.size, countSuffix: selectedPaths.size === 1 ? "" : "s" }),
+            onClick: () => startDelete(collectSelectedNodes(roots)),
+            danger: true,
+            separatorAfter: true,
+          });
+        }
         if (node.isDir) {
           items.push({ key: "newfile", label: t("files.newFile"), onClick: () => startCreate(node.fullPath, false) });
           items.push({ key: "newfolder", label: t("files.newFolder"), onClick: () => startCreate(node.fullPath, true), separatorAfter: true });
         }
-        if (!node.isDir) {
+        if (!node.isDir && !multi) {
           items.push({
             key: "download",
             label: t("files.download"),
             onClick: () => window.open(`/api/files/${encodeFilePathForApi(node.fullPath)}?type=download`, "_blank"),
           });
         }
-        items.push({ key: "copyPath", label: t("files.copyPath"), onClick: () => void copyPath(node) });
+        if (multi) {
+          items.push({
+            key: "copyPaths",
+            label: t("files.copyPathMultiple", { count: selectedPaths.size, countSuffix: selectedPaths.size === 1 ? "" : "s" }),
+            onClick: async () => {
+              const rels = Array.from(selectedPaths).map((p) => getRelativeFilePath(p, cwd));
+              try {
+                await navigator.clipboard.writeText(rels.join("\n"));
+                setFileOpNotice(t("files.pathCopied"));
+              } catch {
+                setFileOpError(t("files.copyFailed"));
+              }
+            },
+          });
+        } else {
+          items.push({ key: "copyPath", label: t("files.copyPath"), onClick: () => void copyPath(node) });
+        }
       } else {
         items.push({ key: "newfile", label: t("files.newFile"), onClick: () => startCreate(cwd, false) });
         items.push({ key: "newfolder", label: t("files.newFolder"), onClick: () => startCreate(cwd, true) });
+        items.push({ key: "refresh", label: t("files.refresh"), onClick: bumpRefresh, separatorAfter: true });
+        if (selectedPaths.size > 0) {
+          items.push({ key: "selectNone", label: t("files.selectNone"), onClick: clearSelection });
+        }
       }
       return items;
     },
-    [t, startRename, startDelete, startCreate, copyPath, cwd, openWithSystem],
+    [t, startRename, startDelete, startCreate, copyPath, cwd, openWithSystem, selectedPaths, roots, collectSelectedNodes, bumpRefresh, clearSelection],
   );
 
   // Root-level phantom row: only when creating at cwd (the root list itself).
@@ -1283,8 +1489,58 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
       ? editing
       : null;
 
+  const handleContainerClick = useCallback((event: React.MouseEvent) => {
+    if ((event.target as HTMLElement).closest("[data-path]")) return;
+    clearSelection();
+  }, [clearSelection]);
+
+  const handleTreeKeyDown = useCallback((event: React.KeyboardEvent) => {
+    const target = event.target as HTMLElement;
+    if (target.closest("input, textarea")) return;
+    if (selectedPaths.size === 0) return;
+    const path = lastClickedPath ?? Array.from(selectedPaths)[0];
+    const nodeInfo = getNodeInfoFromDom(containerRef.current, path);
+    if (!nodeInfo) return;
+    const { name, isDir } = nodeInfo;
+    if (event.key === "Enter" && !isDir) {
+      event.preventDefault();
+      onOpenFile(path, name);
+    } else if (event.key === "F2") {
+      event.preventDefault();
+      startRename({ fullPath: path, name, isDir, size: 0 });
+    } else if (event.key === "Delete" || event.key === "Backspace") {
+      event.preventDefault();
+      const nodes = collectSelectedNodes(roots);
+      if (nodes.length > 0) startDelete(nodes);
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      clearSelection();
+    } else if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      const rows = getVisibleRowsFromDom(containerRef.current);
+      const idx = rows.indexOf(path);
+      const nextIdx = idx === -1 ? 0 : (event.key === "ArrowDown" ? idx + 1 : idx - 1);
+      const next = rows[nextIdx];
+      if (next) {
+        const info = getNodeInfoFromDom(containerRef.current, next);
+        if (info) {
+          selectSingle(next);
+          scrollRowIntoView(containerRef.current, next);
+        }
+      }
+    }
+  }, [selectedPaths, lastClickedPath, onOpenFile, startRename, collectSelectedNodes, roots, startDelete, clearSelection, selectSingle]);
+
   return (
-    <div style={{ minHeight: "100%" }}>
+    <div
+      data-file-explorer
+      ref={containerRef}
+      tabIndex={0}
+      style={{ minHeight: "100%", outline: "none" }}
+      onClick={handleContainerClick}
+      onKeyDown={handleTreeKeyDown}
+      onContextMenu={handleBlankContextMenu}
+    >
       <input ref={uploadInputRef} type="file" multiple hidden onChange={handleUploadInput} />
       {showUploadFeedback && (
         <div style={{ padding: "6px 8px", borderBottom: "1px solid var(--border)" }}>
@@ -1441,14 +1697,7 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
       )}
 
       {(changesCollapsed || gitFiles.length === 0) && (
-        <div
-          style={{ padding: "2px 4px" }}
-          onContextMenu={(event) => {
-            event.preventDefault();
-            event.stopPropagation();
-            handleBlankContextMenu(event);
-          }}
-        >
+        <div style={{ padding: "2px 4px" }}>
           {loading ? (
             <div style={{ padding: "8px 12px", fontSize: 11, color: "var(--text-dim)" }}>Loading files...</div>
           ) : error ? (
@@ -1485,7 +1734,10 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
                   onCancelEdit={cancelEditing}
                   onDragStartNode={handleDragStartNode}
                   onDropOnNode={(folder) => void handleDropOnNode(folder)}
-                  getDraggedPath={getDraggedPath}
+                  getDraggedPaths={getDraggedPaths}
+                  selectedPaths={selectedPaths}
+                  onSelectNode={handleSelectNode}
+                  onActivateNode={handleActivateNode}
                 />
               ))}
             </>
@@ -1509,8 +1761,9 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
 
       {deleting && (
         <DeleteConfirmDialog
-          name={deleting.node.name}
-          isDir={deleting.node.isDir}
+          count={deleting.nodes.length}
+          hasFolder={deleting.nodes.some((n) => n.isDir)}
+          previewName={deleting.nodes[0]?.name ?? ""}
           busy={deleting.busy}
           error={deleting.error}
           onCancel={cancelDelete}

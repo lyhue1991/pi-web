@@ -1,4 +1,5 @@
 const EXPLORER_OPEN_STORAGE_KEY = "pi-web:file-explorer:open";
+const EXPLORER_MAXIMIZED_STORAGE_KEY = "pi-web:file-explorer:maximized";
 
 interface StorageLike {
   getItem(key: string): string | null;
@@ -30,6 +31,27 @@ export function saveExplorerOpen(
   if (!storage) return;
   try {
     storage.setItem(EXPLORER_OPEN_STORAGE_KEY, String(open));
+  } catch {
+    // Persistence is best-effort; privacy mode and storage quotas must not break the explorer.
+  }
+}
+
+export function loadExplorerMaximized(storage: StorageLike | null = getBrowserStorage()): boolean {
+  if (!storage) return false;
+  try {
+    return storage.getItem(EXPLORER_MAXIMIZED_STORAGE_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
+export function saveExplorerMaximized(
+  maximized: boolean,
+  storage: StorageLike | null = getBrowserStorage(),
+): void {
+  if (!storage) return;
+  try {
+    storage.setItem(EXPLORER_MAXIMIZED_STORAGE_KEY, String(maximized));
   } catch {
     // Persistence is best-effort; privacy mode and storage quotas must not break the explorer.
   }
