@@ -11,7 +11,6 @@ import { isEditToolName } from "@/lib/tool-names";
 import { TurnWrittenFiles } from "./TurnWrittenFiles";
 import type { WrittenFile } from "@/lib/turn-written-files";
 import { skillExpansionToCommand } from "@/lib/slash-display";
-import { estimateContentTokens } from "@/lib/token-estimate";
 import type {
   AgentMessage,
   UserMessage,
@@ -25,6 +24,18 @@ import type {
   ToolCallContent,
   ThinkingContent,
 } from "@/lib/types";
+
+// CJK chars ~1 token each (GLM/DeepSeek/GPT-o200k); other chars ~4 chars/token.
+const CJK_PATTERN = /[\u3000-\u30ff\u3400-\u9fff\uf900-\ufaff\u{20000}-\u{2fa1f}\uac00-\ud7af]/u;
+function estimateTokens(text: string): number {
+  let cjk = 0;
+  let rest = 0;
+  for (const ch of text) {
+    if (CJK_PATTERN.test(ch)) cjk++;
+    else rest++;
+  }
+  return cjk + rest / 4;
+}
 
 const MAX_THINKING_CACHE_ENTRIES = 100;
 const thinkingContentCache = new Map<string, Promise<string>>();
@@ -634,7 +645,12 @@ function AssistantMessageView({
         return changed ? next : prev;
       });
 
-      const tokens = estimateContentTokens(bs);
+      let tokens = 0;
+      for (const b of bs) {
+        if (b.type === "text") tokens += estimateTokens((b as TextContent).text ?? "");
+        else if (b.type === "thinking") tokens += estimateTokens((b as ThinkingContent).thinking ?? "");
+        else if (b.type === "toolCall") tokens += estimateTokens(JSON.stringify((b as ToolCallContent).input ?? {}));
+      }
       if (tokens === 0) return;
       if (streamStartRef.current === null) streamStartRef.current = now;
       const elapsed = (now - streamStartRef.current) / 1000;
@@ -667,7 +683,13 @@ function AssistantMessageView({
           <span>{modelNames?.[`${message.provider}:${message.model}`] ?? modelNames?.[message.model] ?? message.model}</span>
         )}
         {isStreaming && (() => {
-          const est = Math.round(estimateContentTokens(blocks));
+          let tokens = 0;
+          for (const b of blocks) {
+            if (b.type === "text") tokens += estimateTokens((b as TextContent).text ?? "");
+            else if (b.type === "thinking") tokens += estimateTokens((b as ThinkingContent).thinking ?? "");
+            else if (b.type === "toolCall") tokens += estimateTokens(JSON.stringify((b as ToolCallContent).input ?? {}));
+          }
+          const est = Math.round(tokens);
           return (
             <>
 
