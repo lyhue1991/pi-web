@@ -69,7 +69,8 @@ lib/
   rpc-manager.ts                AgentSessionWrapper + 注册表 + startRpcSession
   session-reader.ts             SessionManager 包装 + 路径缓存 + buildSessionContext 适配
   normalize.ts                  normalizeToolCalls()（文件格式与类型字段不一致）
-  tool-presets.ts               PRESET_NONE/DEFAULT/FULL + getPresetFromTools()
+  tool-presets.ts               PRESET_NONE/READ_ONLY/DEFAULT/FULL + getPresetFromTools()
+  tool-preset-preference.ts     浏览器持久化的新会话默认工具预设
   model-scope.ts                enabledModels 作用域解析（委托 SDK）
   startup-preferences.ts        持久化浏览器选择的模型/thinking 有效值
   provider-listing.ts           能力驱动的 provider 列表（纯函数）
@@ -95,6 +96,8 @@ lib/
   skills-service.ts / skill-lock.ts / skill-updates.ts / npx.ts
   markdown.ts / clipboard.ts / pi-types.ts / types.ts / api-types.ts
   chat-lazy-load.ts / message-display.ts / panel-layout.ts / initial-navigation.ts
+  agent-client.ts               /api/agent 命令的 typed fetch 助手
+  draft-store.ts                本地草稿持久化助手
   i18n/                         内置 i18n 层（registry/format/types/messages/）
 
 components/
@@ -191,6 +194,7 @@ pi 存储的 toolCall 块为 `{type:"toolCall", id, name, arguments}`，而 `Too
 
 ### 新会话工具预设
 工具名在会话创建时传入（`POST /api/agent/new` -> `toolNames[]`）。对已存在会话，挂载时通过 `get_tools` -> `getPresetFromTools()` 推断当前预设。当工具被完全禁用（`toolNames = []`）时，`rpc-manager.ts` 传入空工具允许列表，并在启动/重载/资源发现后强制 `agent.state.systemPrompt = ""`。
+用户最后显式选择的预设存储在浏览器 `localStorage` 中，仅初始化新会话的编辑器。已存在的会话**绝不**信任该偏好；它们使用实时 `get_tools` 状态，或在无 wrapper 时使用 pi 的默认值。
 
 ### 新会话的模型默认值
 `GET /api/models` 返回从 `~/.pi/agent/settings.json` 读取的 `defaultModel`。`ChatWindow` 为新会话在挂载时预选它。浏览器显式选择的模型/thinking 在 AgentSession 构造时原子地应用，随后 `lib/startup-preferences.ts` 持久化其有效值，且**不**回放 `set_model`/`set_thinking_level`；隐式 `enabledModels` 回退与 thinking 钉选不被持久化。
@@ -216,10 +220,12 @@ pi 存储的 toolCall 块为 `{type:"toolCall", id, name, arguments}`，而 `Too
 - 新 worktree 创建在 `<repoRoot>-worktrees/<sanitized-branch>` 下。复用已有分支；否则 `git worktree add -b` 创建分支。
 - 移除脏 worktree 返回 `409` 且 `{ dirty: true }`，以便 UI 询问后再用 `force` 重试。
 - cwd 指向已移除 worktree 的会话被回推断为主项目，而非变成幻影项目行。
+- git 即使在 Windows 上也输出 POSIX 风格绝对路径，因此从 git 读出的每个路径都经过 `toNativePath()`（`lib/paths.ts`）后再比较或返回。用 `samePath()` 比较路径，**绝不要**用 `===`——原始相等比较在 Windows 上使 `isTopLevel` 永远为 false，完全隐藏了 worktree 切换器。分支名不是路径，必须保留正斜杠。浏览器代码无法应用 Node 路径规则，所以 `/api/worktrees` 在服务端解析 `currentWorktreePath`；侧栏须用该身份做高亮和移除回退。
 
 ### 文件访问允许列表
 - `/api/files` 刻意**不是**通用文件浏览器。允许根来自会话 cwd、其解析后的项目根、`~/pi-cwd-*`，以及显式 `allowFileRoot()` 添加的根。
 - `/api/cwd/validate`、`/api/default-cwd`、`/api/worktrees` 在使新位置可浏览时调用 `allowFileRoot()`。
+- 允许根以斜杠归一化形式存储，但这只是 Set 键约定，并非正确性要求：`isPathWithinRoots()`（`lib/path-security.ts`，`isFilePathAllowed()` 背后的唯一实现）会重新解析并大小写折叠两侧，因此任一路径形式都能正确授权。保持该唯一实现——它是安全边界。
 
 ### 插件与技能
 - `/api/plugins` 用 pi 的 `SettingsManager` + `DefaultPackageManager` 做全局/项目包的安装、移除、更新、启用、禁用。禁用会为该包条目写入空的 `extensions/skills/prompts/themes` 数组。
