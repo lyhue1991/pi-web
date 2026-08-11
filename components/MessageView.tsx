@@ -909,6 +909,7 @@ function ToolCallBlock({ block, result, duration }: { block: ToolCallContent; re
   const resultText = result
     ? result.content.filter((b): b is { type: "text"; text: string } => b.type === "text").map((b) => b.text).join("\n")
     : null;
+  const resultImages = result ? result.content.filter((b): b is ImageContent => b.type === "image") : [];
   const resultIsEmpty = resultText === null ? false : (resultText.trim() === "(no output)" || resultText.trim() === "");
   const isError = result?.isError ?? false;
 
@@ -953,6 +954,30 @@ function ToolCallBlock({ block, result, duration }: { block: ToolCallContent; re
           <polyline points="2 3.5 5 6.5 8 3.5" />
         </svg>
       </button>
+
+      {/* ── Tool result images — always visible, outside the fold ── */}
+      {resultImages.length > 0 && (
+        <div
+          style={{
+            display: "flex",
+            gap: 6,
+            flexWrap: "wrap",
+            padding: "8px 10px",
+            borderTop: isError ? "1px solid rgba(248,113,113,0.25)" : "1px solid rgba(34,197,94,0.2)",
+          }}
+        >
+          {resultImages.map((img, i) => (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              key={i}
+              src={imageSource(img)}
+              alt=""
+              loading="lazy"
+              style={{ maxWidth: 240, maxHeight: 240, borderRadius: 6, objectFit: "contain", display: "block", border: "1px solid var(--border)" }}
+            />
+          ))}
+        </div>
+      )}
 
       {/* ── Expanded: input args ── */}
       {expanded && !isEditTool && (
@@ -1241,24 +1266,26 @@ function PairedResult({ text, isEmpty, isError }: {
         background: isError ? "rgba(248,113,113,0.04)" : "var(--bg-subtle)",
       }}
     >
-      <pre
-        style={{
-          margin: 0,
-          padding: "8px 10px",
-          color: isError ? "#f87171" : (isEmpty ? "var(--text-dim)" : "var(--text-muted)"),
-          fontSize: 12,
-          lineHeight: 1.5,
-          overflow: "auto",
-          maxHeight: 400,
-          background: "var(--bg)",
-          whiteSpace: "pre-wrap",
-          wordBreak: "break-all",
-          fontStyle: isEmpty ? "italic" : "normal",
-          opacity: isEmpty ? 0.6 : 1,
-        }}
-      >
-         {isEmpty ? t("i18n.noOutput") : text}
-      </pre>
+      {(!isEmpty || text.trim() !== "") && (
+        <pre
+          style={{
+            margin: 0,
+            padding: "8px 10px",
+            color: isError ? "#f87171" : (isEmpty ? "var(--text-dim)" : "var(--text-muted)"),
+            fontSize: 12,
+            lineHeight: 1.5,
+            overflow: "auto",
+            maxHeight: 400,
+            background: "var(--bg)",
+            whiteSpace: "pre-wrap",
+            wordBreak: "break-all",
+            fontStyle: isEmpty ? "italic" : "normal",
+            opacity: isEmpty ? 0.6 : 1,
+          }}
+        >
+           {isEmpty ? t("i18n.noOutput") : text}
+        </pre>
+      )}
     </div>
   );
 }
