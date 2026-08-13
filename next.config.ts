@@ -10,6 +10,7 @@ try {
 } catch { /* package not found, use default */ }
 
 const nextConfig: NextConfig = {
+  outputFileTracingRoot: __dirname,
   serverExternalPackages: [
     "undici",
     "@earendil-works/pi-coding-agent",
@@ -21,7 +22,7 @@ const nextConfig: NextConfig = {
     // instance of URL"). Keep it as a runtime require from node_modules.
     "trash",
   ],
-  allowedDevOrigins: ['192.168.*.*'],
+  allowedDevOrigins: ["127.0.0.1", "192.168.*.*"],
   async headers() {
     return [
       {

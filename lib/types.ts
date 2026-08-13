@@ -188,6 +188,11 @@ export type ExtensionUiRequest =
       closed?: boolean;
     };
 
+export type BlockingExtensionUiRequest = Extract<
+  ExtensionUiRequest,
+  { method: "select" | "confirm" | "input" | "editor" | "custom" }
+>;
+
 export type ExtensionUiResponse =
   | { type: "extension_ui_response"; id: string; value: string }
   | { type: "extension_ui_response"; id: string; confirmed: boolean }
@@ -275,11 +280,17 @@ export type SessionEntry =
 
 export type FileEntry = SessionHeader | SessionEntry;
 
+export interface BranchPreview {
+  role?: "user" | "assistant";
+  text: string;
+}
+
 export interface SessionTreeNode {
   entry: SessionEntry;
   children: SessionTreeNode[];
   label?: string;
   compressedEntryIds?: string[];
+  branchPreview?: BranchPreview;
 }
 
 export interface SessionInfo {
