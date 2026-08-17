@@ -938,6 +938,8 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
   // The paths being dragged. dataTransfer is unreadable during dragover, so the
   // source paths are carried in a ref instead (same-page DnD only).
   const draggedPathsRef = useRef<Set<string>>(new Set());
+  // Drop target state for the tree background (= the project root / cwd).
+  const [rootDropTarget, setRootDropTarget] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
   const gitStatusByPath = useMemo(() => new Map(
@@ -1181,7 +1183,7 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
     event.dataTransfer.effectAllowed = "move";
   }, [selectedPaths]);
 
-  const handleDropOnNode = useCallback(async (folder: FileNode) => {
+  const moveDraggedInto = useCallback(async (targetDir: string) => {
     const sources = Array.from(draggedPathsRef.current);
     draggedPathsRef.current = new Set();
     if (sources.length === 0) return;
@@ -1189,7 +1191,7 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
     let lastErr: unknown = null;
     const movedMap = new Map<string, string>();
     for (const source of sources) {
-      const newPath = joinFilePath(folder.fullPath, getFileName(source));
+      const newPath = joinFilePath(targetDir, getFileName(source));
       if (newPath === source) continue;
       try {
         await renameOrMovePath(source, newPath);
@@ -1211,6 +1213,44 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
     if (moved > 0) bumpRefresh();
     if (lastErr) reportError(lastErr, "files.nameExists", "files.moveError");
   }, [remapExpandedPaths, bumpRefresh, reportError]);
+
+  const handleDropOnNode = useCallback((folder: FileNode) => moveDraggedInto(folder.fullPath), [moveDraggedInto]);
+
+  // The tree background is the drop target for the project root (cwd): the way
+  // to pull files out of nested folders back to the top level. Folder rows win
+  // when they accept the drag; rows that reject (files, self/descendant) let
+  // the dragover bubble up to this background handler.
+  const rootCanAcceptDrop = useCallback(() => {
+    const dragged = draggedPathsRef.current;
+    if (dragged.size === 0) return false;
+    const root = normalizeFilePathSlashes(cwd).replace(/\/$/, "");
+    for (const raw of dragged) {
+      const parent = normalizeFilePathSlashes(getFileDirectory(raw)).replace(/\/$/, "");
+      if (parent !== root) return true; // at least one item would actually move
+    }
+    return false;
+  }, [cwd]);
+
+  const handleRootDragOver = useCallback((event: React.DragEvent) => {
+    // A folder row already accepted this dragover (it called preventDefault):
+    // clear any stale root highlight and let the row own the drop.
+    if (event.defaultPrevented) {
+      setRootDropTarget(false);
+      return;
+    }
+    if (!rootCanAcceptDrop()) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+    setRootDropTarget(true);
+  }, [rootCanAcceptDrop]);
+
+  const handleRootDrop = useCallback((event: React.DragEvent) => {
+    setRootDropTarget(false);
+    if (event.defaultPrevented) return; // a folder row handled it
+    if (!rootCanAcceptDrop()) return;
+    event.preventDefault();
+    void moveDraggedInto(normalizeFilePathSlashes(cwd).replace(/\/$/, ""));
+  }, [rootCanAcceptDrop, moveDraggedInto, cwd]);
 
   const getDraggedPaths = useCallback(() => draggedPathsRef.current, []);
 
@@ -1356,6 +1396,7 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
       setDeleting(null);
       setFileOpError(null);
       setFileOpNotice(null);
+      setRootDropTarget(false);
     }
 
     setLoading(cwdChanged);
@@ -1697,7 +1738,23 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
       )}
 
       {(changesCollapsed || gitFiles.length === 0) && (
-        <div style={{ padding: "2px 4px" }}>
+        <div
+          style={{
+            padding: "2px 4px",
+            minHeight: 40,
+            borderRadius: 4,
+            background: rootDropTarget ? "var(--bg-selected)" : undefined,
+            outline: rootDropTarget ? "1px dashed var(--accent)" : "none",
+            outlineOffset: -2,
+          }}
+          onDragOver={handleRootDragOver}
+          onDragLeave={(event) => {
+            if (!event.currentTarget.contains(event.relatedTarget as Node)) {
+              setRootDropTarget(false);
+            }
+          }}
+          onDrop={handleRootDrop}
+        >
           {loading ? (
             <div style={{ padding: "8px 12px", fontSize: 11, color: "var(--text-dim)" }}>Loading files...</div>
           ) : error ? (
