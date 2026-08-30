@@ -251,6 +251,8 @@ export const zhCNLocale: LocalePlugin = {
     "chat.attachImage": "附加图片",
     "chat.previewImage": "预览图片",
     "chat.filterModels": "筛选模型…",
+    "chat.changeModelStreaming": "切换模型（本轮结束后生效）",
+    "chat.modelAppliesNextRound": "本轮结束后生效",
     "chat.noMatchingModels": "没有匹配的模型",
     "chat.moreControls": "更多控件",
     "chat.collapseControls": "收起控件",

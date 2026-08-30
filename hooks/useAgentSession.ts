@@ -1514,6 +1514,13 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       // Pi persists model_change synchronously. Reload the canonical session so
       // the model, thinking level, and active leaf all advance together.
       modelSwitchPendingRef.current = false;
+      if (agentRunningRef.current) {
+        // Mid-round switch: the running loop snapshotted the old model in its
+        // loop config, so the new model only applies from the next round.
+        // Skip the reload — it would clobber live streaming state — and keep
+        // the override so the selector shows the chosen model immediately.
+        return;
+      }
       await loadSession(sid);
     } catch (e) {
       console.error("Failed to set model:", e);

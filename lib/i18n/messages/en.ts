@@ -251,6 +251,8 @@ export const enLocale: LocalePlugin = {
     "chat.attachImage": "Attach image",
     "chat.previewImage": "Preview image",
     "chat.filterModels": "Filter models…",
+    "chat.changeModelStreaming": "Change model (applies after this round)",
+    "chat.modelAppliesNextRound": "Applies after this round",
     "chat.noMatchingModels": "No matching models",
     "chat.moreControls": "More controls",
     "chat.collapseControls": "Collapse controls",

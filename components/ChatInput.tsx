@@ -399,6 +399,8 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   const [modelDropdownOpen, setModelDropdownOpen] = useState(false);
   const [modelDropdownRect, setModelDropdownRect] = useState<{ top: number; left: number; width: number } | null>(null);
   const [modelFilter, setModelFilter] = useState("");
+  // Set when the user switches models mid-round; cleared once the round settles.
+  const [streamModelHint, setStreamModelHint] = useState(false);
   const [toolDropdownOpen, setToolDropdownOpen] = useState(false);
   const [thinkingDropdownOpen, setThinkingDropdownOpen] = useState(false);
   const [controlsMenuOpen, setControlsMenuOpen] = useState(false);
@@ -426,6 +428,11 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   const skillDormancy = cwd && skillDormancyState?.cwd === cwd
     ? skillDormancyState.values
     : {};
+
+  // The mid-round model hint is only meaningful while the round is still running.
+  useEffect(() => {
+    if (!isStreaming) setStreamModelHint(false);
+  }, [isStreaming]);
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -2028,7 +2035,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
           gap: 6,
         }}>
 
-          {/* LEFT: attach + model selector (idle) or steer/followup toggle (streaming) */}
+          {/* LEFT: attach + model selector (always; selector stays usable during a running round, the new model applies next round) */}
           <div style={{ flex: isMobile ? "1 1 auto" : "0 0 auto", minWidth: 0, display: "flex", alignItems: "center", gap: 2 }}>
             <button
               onClick={() => fileInputRef.current?.click()}
@@ -2070,7 +2077,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                         return !open;
                       });
                     }}
-                    disabled={isStreaming || modelSwitching}
+                    disabled={modelSwitching}
                     aria-busy={modelSwitching || undefined}
                     style={{
                       display: "flex", alignItems: "center", gap: 6,
@@ -2084,13 +2091,12 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                       border: "none",
                       borderRadius: 9,
                       color: "var(--text-muted)",
-                      cursor: isStreaming || modelSwitching ? "not-allowed" : "pointer",
+                      cursor: modelSwitching ? "not-allowed" : "pointer",
                       fontSize: 12,
-                      opacity: isStreaming ? 0.5 : 1,
                       transition: "background 0.12s, color 0.12s",
                     }}
                     onMouseEnter={(e) => {
-                      if (isStreaming || modelSwitching) return;
+                      if (modelSwitching) return;
                       e.currentTarget.style.background = "var(--bg-hover)";
                       e.currentTarget.style.color = "var(--text)";
                     }}
@@ -2098,7 +2104,11 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                       e.currentTarget.style.background = modelDropdownOpen ? "var(--bg-hover)" : "none";
                       e.currentTarget.style.color = "var(--text-muted)";
                     }}
-                    title={modelSwitching ? "Switching model" : modelOptions.length > 0 ? "Change model" : "No available models"}
+                    title={modelSwitching
+                      ? "Switching model"
+                      : isStreaming
+                        ? t("chat.changeModelStreaming")
+                        : modelOptions.length > 0 ? "Change model" : "No available models"}
                   >
                     {modelSwitching ? (
                       <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" style={{ animation: "spin 0.8s linear infinite", flexShrink: 0 }} aria-hidden="true">
@@ -2193,7 +2203,12 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                                   onClick={() => {
                                     setModelDropdownOpen(false);
                                     setModelFilter("");
-                                    if (!isActive || isAutoModelSelection) onModelChange(opt.provider, opt.modelId);
+                                    if (!isActive || isAutoModelSelection) {
+                                      onModelChange(opt.provider, opt.modelId);
+                                      // Mid-round switch: pi snapshots the model per
+                                      // prompt run, so remind that it applies next round.
+                                      if (isStreaming) setStreamModelHint(true);
+                                    }
                                   }}
                                   style={{
                                     display: "flex", alignItems: "center", gap: 8,
@@ -2222,6 +2237,17 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                     );
                   })()}
                 </div>
+            )}
+            {streamModelHint && isStreaming && !isMobile && (
+              <span style={{
+                marginLeft: 6,
+                fontSize: 11,
+                color: "var(--text-dim)",
+                whiteSpace: "nowrap",
+                flexShrink: 0,
+              }}>
+                {t("chat.modelAppliesNextRound")}
+              </span>
             )}
           </div>
 
