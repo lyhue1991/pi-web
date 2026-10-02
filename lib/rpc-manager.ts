@@ -114,8 +114,61 @@ const CODING_TOOL_NAMES = ["read", "bash", "powershell", "edit", "write", "grep"
 class PlainTextTheme extends Theme {
   constructor() {
     super(
-      { thinkingXhigh: "", searchMatchText: "" } as ConstructorParameters<typeof Theme>[0],
-      { selectedBg: "" } as ConstructorParameters<typeof Theme>[1],
+      {
+        accent: "",
+        border: "",
+        borderAccent: "",
+        borderMuted: "",
+        success: "",
+        error: "",
+        warning: "",
+        muted: "",
+        dim: "",
+        text: "",
+        thinkingText: "",
+        userMessageText: "",
+        customMessageText: "",
+        customMessageLabel: "",
+        toolTitle: "",
+        toolOutput: "",
+        mdHeading: "",
+        mdLink: "",
+        mdLinkUrl: "",
+        mdCode: "",
+        mdCodeBlock: "",
+        mdCodeBlockBorder: "",
+        mdQuote: "",
+        mdQuoteBorder: "",
+        mdHr: "",
+        mdListBullet: "",
+        toolDiffAdded: "",
+        toolDiffRemoved: "",
+        toolDiffContext: "",
+        syntaxComment: "",
+        syntaxKeyword: "",
+        syntaxFunction: "",
+        syntaxVariable: "",
+        syntaxString: "",
+        syntaxNumber: "",
+        syntaxType: "",
+        syntaxOperator: "",
+        syntaxPunctuation: "",
+        thinkingOff: "",
+        thinkingMinimal: "",
+        thinkingLow: "",
+        thinkingMedium: "",
+        thinkingHigh: "",
+        thinkingXhigh: "",
+        bashMode: "",
+      },
+      {
+        selectedBg: "",
+        userMessageBg: "",
+        customMessageBg: "",
+        toolPendingBg: "",
+        toolSuccessBg: "",
+        toolErrorBg: "",
+      },
       "truecolor",
     );
   }
@@ -468,9 +521,10 @@ export class AgentSessionWrapper {
               source: "rpc",
               // Match pi's RPC contract: acknowledge only after synchronous prompt
               // validation and extension preflight have accepted the submission.
-              preflightResult: (success) => {
-                if (success) acceptPreflight();
-              },
+              // pi invokes this only after synchronous validation and extension
+              // preflight accept the submission; the disposition describes how
+              // the accepted input was dispatched.
+              preflightResult: () => acceptPreflight(),
             });
           } catch (error) {
             finishPrompt();
